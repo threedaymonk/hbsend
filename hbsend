@@ -47,14 +47,14 @@ class API
 
   def send_message(phone_number, message)
     puts message.length
-    json = JSON.dump({"message" => {"phone_number" => phone_number, "content" => message}})
-    response = post("/messages", {"Content-Type" => "application/json", "Authorization" => "OAuth " + access_token, "Accept" => "application/json"}, {}, json)
+    data = {"message" => {"phone_number" => phone_number, "content" => message}}
+    response = api_post("/messages", data)
     puts response.body
   end
 
   def get_contacts
-    response = get("/contacts", {"Authorization" => "OAuth " + access_token, "Accept" => "application/json"}, {})
-    response.body
+    response = api_get("/contacts")
+    puts response.body
   end
 
 private
@@ -80,23 +80,26 @@ private
     gets.strip
   end
 
-  def authorize
+  def authenticate
     puts "Visit https://hashblue.com/oauth/authorize?client_id=#{client_id}&redirect_uri=#{CGI.escape(DUMMY_URL)}"
     puts "After authenticating, copy the URL, paste it here, and press Enter."
     url = user_input "URL"
     auth_code = url[/code=(\S+)/, 1]
-    response = post("https://hashblue.com/oauth/access_token", {}, :client_id => client_id, :client_secret => client_secret,
-                    :grant_type => "authorization_code", :code => auth_code, :redirect_uri => DUMMY_URL)
-    handle_auth_response(response)
+    get_access_token :grant_type => "authorization_code", :code => auth_code, :redirect_uri => DUMMY_URL
   end
 
-  def refresh
-    response = post("https://hashblue.com/oauth/access_token", {}, :client_id => client_id, :client_secret => client_secret,
-                    :grant_type => "refresh_token", :refresh_token => @config["refresh_token"])
-    handle_auth_response(response)
+  def refresh_token
+    get_access_token :grant_type => "refresh_token", :refresh_token => @config["refresh_token"]
   end
 
-  def handle_auth_response(response)
+  def get_access_token(options)
+    response = post(
+      "https://hashblue.com/oauth/access_token", {},
+      options.merge(
+        :client_id => client_id,
+        :client_secret => client_secret
+      )
+    )
     data = JSON.parse(response.body)
     @config["access_token"]  = data["access_token"]
     @config["refresh_token"] = data["refresh_token"]
@@ -105,9 +108,9 @@ private
 
   def access_token
     if @config["access_token"].nil?
-      authorize
+      authenticate
     elsif @config["access_token_expires_at"] < Time.now.to_i
-      refresh
+      refresh_token
     end
     @config["access_token"]
   end
@@ -118,24 +121,30 @@ private
   end
 
   def get(endpoint, headers, options)
-    puts endpoint + query_string(options)
-    p headers
     request endpoint do |http, uri|
       return http.request_get(uri.path + query_string(options), headers)
     end
   end
 
   def post(endpoint, headers, options, data="")
-    puts endpoint + query_string(options)
     request endpoint do |http, uri|
       return http.request_post(uri.path + query_string(options), data, headers)
     end
   end
 
+  def api_headers
+    {"Authorization" => "OAuth " + access_token, "Accept" => "application/json"}
+  end
+
+  def api_post(endpoint, data)
+    post(BASE + endpoint, api_headers.merge("Content-Type" => "application/json"), {}, JSON.dump(data))
+  end
+
+  def api_get(endpoint, options={})
+    get(BASE + endpoint, api_headers, options)
+  end
+
   def request(endpoint)
-    unless endpoint =~ /^http/
-      endpoint = BASE + endpoint
-    end
     u = URI.parse(endpoint)
     http = Net::HTTP.new(u.host, u.port)
     if u.scheme == "https"
@@ -151,5 +160,9 @@ end
 config = Configuration.new(File.join(ENV["HOME"], ".config", "hbsend"))
 api = API.new(config)
 
-number, message, = ARGV
-api.send_message(number, message)
+if ARGV.any?
+  number, message, = ARGV
+  api.send_message(number, message)
+else
+  api.get_contacts
+end
